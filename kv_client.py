@@ -1,39 +1,17 @@
 #!/usr/bin/env python3
 
+import logging
 import re
-
-class KV:
-  def __init__(self):
-    self._dict = dict()
-
-  def put(self, key, value):
-    self._dict[key] = value
-
-  def get(self, key):
-    ret = self._dict.get(key)
-    if ret == None:
-      return None, 0
-    return ret, 1
-
-  def cas(self, key, value, orig):
-    """Not a true CAS function"""
-    ret = self._dict.get(key)
-    if ret == None or ret != orig:
-      return False
-    else:
-      self._dict[key] = value
-      return True
-
-kv = KV()
-kv.put("STACK_CREATION_LOCK", 0)
+import sys
+from simplekv_client import SimpleKVClient
 
 def inc(key):
-  cur, _ = kv.get(key)
+  cur, _ = kv.get_int(key)
   val = 0
   if cur != None:
     val = cur
   while not kv.cas(key, val+1, cur):
-    cur, _ = kv.get(key)
+    cur, _ = kv.get_int(key)
     val = 0
     if cur != None:
       val = cur
@@ -58,7 +36,7 @@ class Stack:
     before = inc(self._counter_key)
     return self._name_key + ":@" + str(before+1)
   def get_top(self):
-    ret, _ = kv.get(self._name_key)
+    ret, _ = kv.get_int(self._name_key)
     return ret
 
 def get_or_create_stack(stackName):
@@ -67,15 +45,15 @@ def get_or_create_stack(stackName):
   if stackName.startswith("[]:"):
     return None
   key = get_stack_name_key(stackName)
-  ret, _ = kv.get(key)
+  ret, _ = kv.get_int(key)
   if ret == None:
-    while not kv.cas("STACK_CREATION_LOCK", key, 0):
+    while not kv.cas("STACK_CREATION_LOCK", 1, 0):
       continue
-    kv.put(key, "NULL")
+    kv.put(key, 0)
     kv.put(key + ":COUNTER", 0)
-    while not kv.cas("STACK_CREATION_LOCK", 0, key):
+    while not kv.cas("STACK_CREATION_LOCK", 0, 1):
       continue
-    ret, _ = kv.get(key)
+    ret, _ = kv.get_int(key)
   return Stack(stackName)
 
 def encode_value(value, next_offset):
@@ -111,18 +89,19 @@ def push(stackName, value):
     return
   new_node_key = st.new_node()
   print("New addr: " + new_node_key)
+  new_node_addr_offset = extract_address_offset(new_node_key)
   while True:
     old_top = st.get_top()
     print("Old top: ", old_top)
-    addr_offset = extract_address_offset(old_top)
-    encoded_value = encode_value(value, addr_offset)
+    #addr_offset = extract_address_offset(old_top)
+    encoded_value = encode_value(value, old_top)
     if len(encoded_value) > 32000:
       print("Error: stack entry size cannot exceed 32K.")
       return
-    print("Encoded: " + encoded_value.decode())
+    print("Encoded: " + str(encoded_value))
     # TODO: DO THIS WITH NONE VALUE FIRST
     kv.put(new_node_key, encoded_value)
-    if not kv.cas(get_stack_name_key(stackName), new_node_key, old_top):
+    if not kv.cas(get_stack_name_key(stackName), new_node_addr_offset, old_top):
       continue
     break
 
@@ -130,10 +109,7 @@ def decode(stackName, encoded):
   value_len = int.from_bytes(encoded[:2], "big")
   value = encoded[2:2+value_len].decode()
   next_addr = int.from_bytes(encoded[2+value_len:], "big")
-  if next_addr == 0:
-    return value_len, value, "[]:" + stackName + ":@NULL"
-  else:
-    return value_len, value, "[]:" + stackName + ":@" + str(next_addr)
+  return value_len, value, next_addr
 
 def pop(stackName):
   """Pop
@@ -148,25 +124,31 @@ def pop(stackName):
     old_top = st.get_top()
     if old_top == "NULL":
       return None
-    ret, _ = kv.get(old_top)
+    old_top_addr = "[]:" + stackName + ":@" + str(old_top)
+    ret, _ = kv.get(old_top_addr)
     if ret == None:
       return None
-    value_len, value, new_top = decode(stackName, ret)
+    value_len, value, new_top = decode(stackName, bytes(ret))
     if not kv.cas(st._name_key, new_top, old_top):
       continue
     return value
 
 if __name__ == "__main__":
-  push("haha", "123")
-  push("haha", "456")
-  push("haha", "789")
+  logging.basicConfig()
+  if len(sys.argv) > 1:
+    kv = SimpleKVClient(sys.argv[1])
+  else:
+    kv = SimpleKVClient()
+  kv.put("STACK_CREATION_LOCK", 0)
+
+  push("haha", "apple")
+  push("haha", "banana")
+  push("haha", "cat")
   print("Pop haha", pop("haha"))
-  push("haha", "xxx")
+  push("haha", "dog")
   print("Pop haha", pop("haha"))
   print("Pop haha", pop("haha"))
   print("Pop haha", pop("haha"))
   print("Pop haha", pop("haha"))
-  push("0", "456")
-  push(0, "789")
-  push("[]:hello", "54535")
-  print(pop("great"))
+  push("[]:hello", "world")
+  print("Pop great", pop("great"))

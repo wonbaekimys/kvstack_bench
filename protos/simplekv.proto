@@ -1,0 +1,58 @@
+syntax = "proto3";
+
+package simplekv;
+
+service SimpleKV {
+  rpc Put (PutRequest) returns (PutReply) {}
+  rpc PutInt (PutIntRequest) returns (PutReply) {}
+  rpc Get (GetRequest) returns (GetReply) {}
+  rpc GetInt (GetRequest) returns (GetIntReply) {}
+  rpc Del (DelRequest) returns (DelReply) {}
+  rpc CAS (CASRequest) returns (CASReply) {}
+}
+
+message PutRequest {
+  string key = 1;
+  bytes value = 2;
+}
+
+message PutReply {
+  string message = 1;
+}
+
+message PutIntRequest {
+  string key = 1;
+  uint64 value = 2;
+}
+
+message GetRequest {
+  string key = 1;
+}
+
+message GetReply {
+  bytes value = 1;
+  uint64 timestamp = 2;
+}
+
+message GetIntReply {
+  uint64 value = 1;
+  uint64 timestamp = 2;
+}
+
+message DelRequest {
+  string key = 1;
+}
+
+message DelReply {
+  string message = 1;
+}
+
+message CASRequest {
+  string key = 1;
+  uint64 value = 2;
+  uint64 orig = 3;
+}
+
+message CASReply {
+  bool success = 1;
+}
