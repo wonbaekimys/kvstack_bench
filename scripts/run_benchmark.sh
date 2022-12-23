@@ -9,8 +9,7 @@ server_host=$(echo $server_address | cut -d ":" -f 1)
 server_port=$(echo $server_address | cut -d ":" -f 2)
 server_exec=$(realpath simplekv_server)
 client_exec=$(realpath kvstack_bench.py)
-#echo $server_host $server_port
-#ssh $server_host "${server_exec}"
+python3 kvstack_init_lock.py $server_address
 for ((i=0;i<num_clients;i++)); do
   python3 kvstack_bench.py $server_address &
 done
