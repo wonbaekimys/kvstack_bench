@@ -9,12 +9,8 @@ endif()
 set(CMAKE_BUILD_TYPE "Release")
 
 find_package(Threads REQUIRED)
-find_package(TBB REQUIRED)
+#find_package(TBB REQUIRED)
 find_package(LibCDS REQUIRED)
-
-##
-# Link options
-#set(LINK_FLAGS "-lpthread")
 
 if(GRPC_AS_SUBMODULE)
   # One way to build a projects that uses gRPC is to just include the
@@ -120,15 +116,22 @@ set(simplekv_proto_srcs "${CMAKE_CURRENT_BINARY_DIR}/simplekv.pb.cc")
 set(simplekv_proto_hdrs "${CMAKE_CURRENT_BINARY_DIR}/simplekv.pb.h")
 set(simplekv_grpc_srcs "${CMAKE_CURRENT_BINARY_DIR}/simplekv.grpc.pb.cc")
 set(simplekv_grpc_hdrs "${CMAKE_CURRENT_BINARY_DIR}/simplekv.grpc.pb.h")
-#message("${_PROTOBUF_PROTOC}")
-#message("${_GRPC_CPP_PLUGIN_EXECUTABLE}")
+set(simplekv_proto_py "${CMAKE_CURRENT_BINARY_DIR}/simplekv_pb2.py")
+set(simplekv_grpc_py "${CMAKE_CURRENT_BINARY_DIR}/simplekv_pb2_grpc.py")
 add_custom_command(
-    OUTPUT "${simplekv_proto_srcs}" "${simplekv_proto_hdrs}" "${simplekv_grpc_srcs}" "${simplekv_grpc_hdrs}"
+    #OUTPUT "${simplekv_proto_srcs}" "${simplekv_proto_hdrs}" "${simplekv_grpc_srcs}" "${simplekv_grpc_hdrs}"
+    OUTPUT "${simplekv_proto_srcs}" "${simplekv_proto_hdrs}" "${simplekv_grpc_srcs}" "${simplekv_grpc_hdrs}" "${simplekv_proto_py}" "${simplekv_grpc_py}"
     COMMAND "${_PROTOBUF_PROTOC}"
     ARGS  --grpc_out "${CMAKE_CURRENT_BINARY_DIR}"
           --cpp_out "${CMAKE_CURRENT_BINARY_DIR}"
           -I "${simplekv_proto_path}"
           --plugin=protoc-gen-grpc="${_GRPC_CPP_PLUGIN_EXECUTABLE}"
+          "${simplekv_proto}"
+    COMMAND "python3"
+    ARGS  -m grpc_tools.protoc
+          --python_out "${CMAKE_CURRENT_BINARY_DIR}"
+          --grpc_python_out "${CMAKE_CURRENT_BINARY_DIR}"
+          -I "${simplekv_proto_path}"
           "${simplekv_proto}"
     DEPENDS "${simplekv_proto}")
 
@@ -147,16 +150,9 @@ target_link_libraries(simplekv_grpc_proto
     ${_PROTOBUF_LIBPROTOBUF})
 
 # client
-get_filename_component(simplekv_client_py "simplekv_client.py" ABSOLUTE)
-add_custom_target(copy_python_client ALL DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/simplekv_client.py")
-# TODO: Let this command copy client source file if it is changed.
-#       Currently, this command only copy the source file when there doesn't exist the same file in the build dir.
-add_custom_command(
-    OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/simplekv_client.py"
-    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-            "${simplekv_client_py}"
-            "${CMAKE_CURRENT_BINARY_DIR}/simplekv_client.py"
-    DEPENDS copy_python_client)
+get_filename_component(simplekv_client_py_src "simplekv_client.py" ABSOLUTE)
+set(simplekv_client_py "${CMAKE_CURRENT_BINARY_DIR}/simplekv_client.py")
+configure_file("${simplekv_client_py_src}" "${simplekv_client_py}" COPYONLY)
 
 # server
 add_executable(simplekv_server "simplekv_server.cc")
@@ -165,6 +161,15 @@ target_link_libraries(simplekv_server
     ${_REFLECTION}
     ${_GRPC_GRPCPP}
     ${_PROTOBUF_LIBPROTOBUF}
-    /home/wkim/.local/lib/libcds.so)
-    #cds)
-  #/usr/local/lib64/libcds.so)
+    ~/.local/lib/libcds.so)
+
+# benchmark
+get_filename_component(kvstack_bench_py_src "kvstack_bench.py" ABSOLUTE)
+get_filename_component(kvstack_init_lock_py_src "kvstack_init_lock.py" ABSOLUTE)
+get_filename_component(benchmark_run_script_src "scripts/run_benchmark.sh" ABSOLUTE)
+set(kvstack_bench_py "${CMAKE_CURRENT_BINARY_DIR}/kvstack_bench.py")
+set(kvstack_init_lock_py "${CMAKE_CURRENT_BINARY_DIR}/kvstack_init_lock.py")
+set(benchmark_run_script "${CMAKE_CURRENT_BINARY_DIR}/run_benchmark.sh")
+configure_file("${kvstack_bench_py_src}" "${kvstack_bench_py}" COPYONLY)
+configure_file("${kvstack_init_lock_py_src}" "${kvstack_init_lock_py}" COPYONLY)
+configure_file("${benchmark_run_script_src}" "${benchmark_run_script}" COPYONLY)
