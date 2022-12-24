@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-import logging
+import random
 import re
 import sys
 from simplekv_client import SimpleKVClient
@@ -48,11 +48,16 @@ def extract_address_num(kv_address):
     return int(result.group(1))
   return None
 
-def decode_value(stackName, encoded):
+def decode_value(encoded):
   value_len = int.from_bytes(encoded[:2], "big")
   value = encoded[2:2+value_len].decode()
   next_addr = int.from_bytes(encoded[2+value_len:], "big")
   return value_len, value, next_addr
+
+def extract_next_address_num(encoded):
+  value_len = int.from_bytes(encoded[:2], "big")
+  next_addr = int.from_bytes(encoded[2+value_len:], "big")
+  return next_addr
 
 def inc(key):
   cur, _ = kv.get_int(key)
@@ -80,7 +85,7 @@ def push(stackName, value):
     raise Exception("stackName starts with \"[]:\"")
   if len(value) > 31990:
     raise Exception("stack entry size exceeded 32K.")
-  # Try to get old top address.
+  # Try to get current top address.
   stack_name_key = get_stack_name_key(stackName)
   old_top_addr_num, _ = kv.get_int(stack_name_key)
   if old_top_addr_num == None:
@@ -106,38 +111,59 @@ def push(stackName, value):
     encoded_value[2+len(value):] = old_top_addr_num.to_bytes(8, "big", signed=False)
 
 def pop(stackName):
-  try:
-    maybe_create_stack(stackName)
-  except Exception as e:
-    raise e
+  # Try to get current top address.
   stack_name_key = get_stack_name_key(stackName)
-  while True:
+  old_top_addr_num, _ = kv.get_int(stack_name_key)
+  if old_top_addr_num == None:
+    # The stack does not exist. Creat a new one.
+    while not kv.cas("STACK_CREATION_LOCK", 1, 0):
+      continue
+    kv.put(stack_name_key, 0)
+    addr_cnounter_key = get_address_counter_key(stackName)
+    kv.put(addr_cnounter_key, 0)
+    while not kv.cas("STACK_CREATION_LOCK", 0, 1):
+      continue
+    old_top_addr_num = 0
+  if old_top_addr_num == 0:
+    # No entry in this stack
+    return
+  # Get current top
+  old_top_addr = get_address_key(stackName, old_top_addr_num)
+  ret, _ = kv.get(old_top_addr)
+  if ret == None:
+    # error
+    raise Exception("No key in KV. stack entry address: " + old_top_addr)
+  next_top_addr_num = extract_next_address_num(bytes(ret))
+  # Try CAS top
+  while not kv.cas(stack_name_key, next_top_addr_num, old_top_addr_num):
     old_top_addr_num, _ = kv.get_int(stack_name_key)
     if old_top_addr_num == 0:
-      return None
+      # No entry in this stack
+      return
     old_top_addr = get_address_key(stackName, old_top_addr_num)
     ret, _ = kv.get(old_top_addr)
     if ret == None:
-      return None
-    _, value, new_top_addr_num = decode_value(stackName, bytes(ret))
-    if not kv.cas(stack_name_key, new_top_addr_num, old_top_addr_num):
-      continue
-    kv.Del(old_top_addr)
-    return value
+      raise Exception("No key in KV. stack entry address: " + old_top_addr)
+    next_top_addr_num = extract_next_address_num(bytes(ret))
 
 if __name__ == "__main__":
-  if len(sys.argv) > 1:
-    kv = SimpleKVClient(sys.argv[1])
-  else:
-    kv = SimpleKVClient()
+  if len(sys.argv) < 5:
+    print("Usage: " + sys.argv[0] + " <server_address> <value_size> <num_requests> <push_ratio>")
+    exit(1)
 
-  push("haha", "apple")
-  push("haha", "banana")
-  push("haha", "cat")
-  print("Pop haha", pop("haha"))
-  push("haha", "dog")
-  print("Pop haha", pop("haha"))
-  print("Pop haha", pop("haha"))
-  print("Pop haha", pop("haha"))
-  print("Pop haha", pop("haha"))
-  print("Pop great", pop("great"))
+  kv = SimpleKVClient(sys.argv[1])
+  benchmark_value_size = int(sys.argv[2])
+  benchamrk_num_requests = int(sys.argv[3])
+  benchmark_push_ratio = float(sys.argv[4])
+
+  stack_name = "my_stack"
+  value = 'a' * benchmark_value_size
+
+  req_done_cnt = 0
+  while req_done_cnt < benchamrk_num_requests:
+    # ....
+    if random.random() < benchmark_push_ratio:
+      push(stack_name, value)
+    else:
+      pop(stack_name)
+    req_done_cnt += 1
