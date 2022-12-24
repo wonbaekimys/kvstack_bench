@@ -94,8 +94,8 @@ class SimpleKVServiceImpl final : public simplekv::SimpleKV::Service {
     }
     map_type_int::guarded_ptr gp(map_int_.get(req->key()));
     if (gp) {
-      int64_t expected = req->orig();
-      bool result = ((std::atomic<int64_t>*) &gp->second.first)->compare_exchange_strong(
+      uint64_t expected = req->orig();
+      bool result = ((std::atomic<uint64_t>*) &gp->second.first)->compare_exchange_strong(
           expected, req->value());
       rep->set_success(result);
     } else {
@@ -111,7 +111,7 @@ class SimpleKVServiceImpl final : public simplekv::SimpleKV::Service {
   };
 
   typedef cds::container::FeldmanHashMap<cds::gc::HP, std::string, std::pair<std::string, std::time_t>, string_key_traits> map_type;
-  typedef cds::container::FeldmanHashMap<cds::gc::HP, std::string, std::pair<int64_t, std::time_t>, string_key_traits> map_type_int;
+  typedef cds::container::FeldmanHashMap<cds::gc::HP, std::string, std::pair<uint64_t, std::time_t>, string_key_traits> map_type_int;
   
   map_type map_;
   map_type_int map_int_;
@@ -129,8 +129,10 @@ void RunServer() {
   builder.RegisterService(&service);
 
   int physical_cpus = std::thread::hardware_concurrency();
-  builder.SetSyncServerOption(grpc::ServerBuilder::SyncServerOption::NUM_CQS, physical_cpus);
-  builder.SetSyncServerOption(grpc::ServerBuilder::SyncServerOption::MAX_POLLERS, 2 * physical_cpus);
+  int max_pollers = std::ceil(physical_cpus / 2);
+  int num_cqs = std::ceil(max_pollers / 2);
+  builder.SetSyncServerOption(grpc::ServerBuilder::SyncServerOption::NUM_CQS, num_cqs);
+  builder.SetSyncServerOption(grpc::ServerBuilder::SyncServerOption::MAX_POLLERS, max_pollers);
 
   // Finally assemble the server.
   std::unique_ptr<grpc::Server> server(builder.BuildAndStart());

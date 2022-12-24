@@ -173,3 +173,12 @@ set(benchmark_run_script "${CMAKE_CURRENT_BINARY_DIR}/run_benchmark.sh")
 configure_file("${kvstack_bench_py_src}" "${kvstack_bench_py}" COPYONLY)
 configure_file("${kvstack_init_lock_py_src}" "${kvstack_init_lock_py}" COPYONLY)
 configure_file("${benchmark_run_script_src}" "${benchmark_run_script}" COPYONLY)
+
+# local benchmark
+add_executable(kvstack_local_test "kvstack_local_test.cc")
+target_link_libraries(kvstack_local_test
+    simplekv_grpc_proto
+    ${_REFLECTION}
+    ${_GRPC_GRPCPP}
+    ${_PROTOBUF_LIBPROTOBUF}
+    ~/.local/lib/libcds.so)

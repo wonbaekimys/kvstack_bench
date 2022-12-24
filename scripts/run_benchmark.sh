@@ -17,7 +17,7 @@ client_exec=$(realpath kvstack_bench.py)
 python3 kvstack_init_lock.py $server_address
 
 value_size=100
-num_requests=5000
+num_requests=1000
 echo "========================================="
 echo "Benchmark configuration:"
 echo "  value_size: $value_size"
