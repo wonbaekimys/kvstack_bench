@@ -19,7 +19,7 @@ class SimpleKVClient:
     res = self._stub.Get(simplekv_pb2.GetRequest(key=key))
     if res.value == "" and res.timestamp == 0:
       return None, 0
-    return res.value, res.timestamp
+    return bytes(res.value), res.timestamp
 
   def get_int(self, key):
     res = self._stub.GetInt(simplekv_pb2.GetRequest(key=key))
@@ -33,3 +33,8 @@ class SimpleKVClient:
   def cas(self, key, value, orig):
     res = self._stub.CAS(simplekv_pb2.CASRequest(key=key, value=value, orig=orig))
     return res.success
+
+  def load(self, stack_name, value, num_loads):
+    stack_name_key = "[]:" + stack_name
+    stack_counter_key = stack_name_key + ":COUNTER"
+    res = self._stub.Load(simplekv_pb2.LoadRequest(stack_key=stack_name_key, stack_counter_key=stack_counter_key, value=value, num_loads=num_loads))

@@ -9,6 +9,7 @@ service SimpleKV {
   rpc GetInt (GetRequest) returns (GetIntReply) {}
   rpc Del (DelRequest) returns (DelReply) {}
   rpc CAS (CASRequest) returns (CASReply) {}
+  rpc Load (LoadRequest) returns (PutReply) {}
 }
 
 message PutRequest {
@@ -55,4 +56,11 @@ message CASRequest {
 
 message CASReply {
   bool success = 1;
+}
+
+message LoadRequest {
+  string stack_key = 1;
+  string stack_counter_key = 2;
+  string value = 3;
+  uint64 num_loads = 4;
 }

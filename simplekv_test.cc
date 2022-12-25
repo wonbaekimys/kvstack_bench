@@ -10,19 +10,6 @@
 #include <cds/container/feldman_hashmap_hp.h>
 #include <cds/container/details/feldman_hashmap_base.h>
 
-std::string EncodeValue(const std::string& value, const uint64_t addr_num) {
-  uint16_t value_len = value.length();
-  size_t encoded_len = 2 + value_len + sizeof(uint64_t);
-  auto buf = std::string(encoded_len, 'X');
-  char* p = const_cast<char*>(buf.data());
-  memcpy(p, &value_len, sizeof(uint16_t));
-  p += sizeof(uint16_t);
-  memcpy(p, value.data(), value_len);
-  p += value_len;
-  memcpy(p, &addr_num, sizeof(uint64_t));
-  return buf;
-}
-
 class SimpleKV {
  public:
   int Put(const std::string& key, const std::string& value) {
@@ -30,19 +17,12 @@ class SimpleKV {
     if (!cds::threading::Manager::isThreadAttached()) {
       cds::threading::Manager::attachThread();
     }
-#if 1
     if (!map_.emplace(key, value, std::time(nullptr))) {
       auto ret = map_.update(key, [&](map_type::value_type& item, map_type::value_type* old) {
           item.second.first = value;
           item.second.second = std::time(nullptr);
         });
     }
-#else
-    auto ret = map_.update(key, [&](map_type::value_type& item, map_type::value_type* old) {
-        item.second.first = value;
-        item.second.second = std::time(nullptr);
-      });
-#endif
     return 0;
   }
 
@@ -51,19 +31,12 @@ class SimpleKV {
     if (!cds::threading::Manager::isThreadAttached()) {
       cds::threading::Manager::attachThread();
     }
-#if 1
     if (!map_int_.emplace(key, value, std::time(nullptr))) {
       auto ret = map_int_.update(key, [&](map_type_int::value_type& item, map_type_int::value_type* old) {
           item.second.first = value;
           item.second.second = std::time(nullptr);
         });
     }
-#else
-    auto ret = map_int_.update(key, [&](map_type_int::value_type& item, map_type_int::value_type* old) {
-        item.second.first = value;
-        item.second.second = std::time(nullptr);
-      });
-#endif
     return 0;
   }
 
@@ -122,65 +95,6 @@ class SimpleKV {
     }
   }
 
-  int Load(const std::string& stack_name_key, const std::string& addr_counter_key,
-           const std::string& value, const size_t num_loads) {
-    // Attach the thread if it is not attached yet
-    if (!cds::threading::Manager::isThreadAttached()) {
-      cds::threading::Manager::attachThread();
-    }
-    uint64_t old_top_addr_num = 0;
-    // Create table if not existing
-    map_type_int::guarded_ptr gp(map_int_.get(stack_name_key));
-    if (!gp) {
-      // Primary
-      map_int_.emplace(stack_name_key, 0, std::time(nullptr));
-      // Alloc Counter
-      map_int_.emplace(addr_counter_key, 0, std::time(nullptr));
-    }
-
-    for (int i = 0; i < num_loads; i++) {
-      if (auto gp = map_type_int::guarded_ptr(map_int_.get(stack_name_key))) {
-        old_top_addr_num = gp->second.first;
-      }
-      // alloc counter
-      uint64_t new_entry_addr_num = 0;
-      if (auto gp = map_type_int::guarded_ptr(map_int_.get(addr_counter_key))) {
-        auto before = ((std::atomic<uint64_t>*) &gp->second.first)->fetch_add(1);
-        new_entry_addr_num = before + 1;
-      }
-      // new entry
-      auto new_entry_addr = stack_name_key + ":@" + std::to_string(new_entry_addr_num);
-      auto encoded_value = EncodeValue(value, old_top_addr_num);
-      auto ret = map_.update(new_entry_addr, [&](map_type::value_type& item, map_type::value_type* old) {
-          item.second.first = encoded_value;
-          item.second.second = std::time(nullptr);
-        });
-      while (true) {
-        bool result = false;
-        if (auto gp = map_type_int::guarded_ptr(map_int_.get(stack_name_key))) {
-          uint64_t expected = old_top_addr_num;
-          result = ((std::atomic<uint64_t>*) &gp->second.first)->compare_exchange_strong(
-              expected, new_entry_addr_num);
-        }
-        if (result) {
-          //std::cout << i << "key: " << new_entry_addr << ", value: " << encoded_value << std::endl;
-          break;
-        }
-        if (auto gp = map_type_int::guarded_ptr(map_int_.get(stack_name_key))) {
-          old_top_addr_num = gp->second.first;
-        }
-        char* p = const_cast<char*>(encoded_value.data());
-        p += 2 + value.length();
-        memcpy(p, &old_top_addr_num, sizeof(uint64_t));
-        ret = map_.update(new_entry_addr, [&](map_type::value_type& item, map_type::value_type* old) {
-            item.second.first = encoded_value;
-            item.second.second = std::time(nullptr);
-          });
-      }
-    }
-    return 0;
-  }
-
  private:
   using Value = std::pair<std::string, std::time_t>;
   struct string_key_traits: public cds::container::feldman_hashmap::traits {
@@ -194,23 +108,11 @@ class SimpleKV {
   map_type_int map_int_;
 };
 
-std::mutex global_mu;
 SimpleKV* kv;
+std::mutex global_mu;
 
 inline std::string GetStackNameKey(const std::string& stack_name) {
   return "[]:" + stack_name;
-}
-
-inline std::string GetAddressKey(const std::string& stack_name, const uint64_t addr_num) {
-  return GetStackNameKey(stack_name) + ":@" + std::to_string(addr_num);
-}
-
-uint64_t ExtractNextAddressNum(const std::string& encoded) {
-  const char* p = encoded.data();
-  uint16_t value_len = *((const uint16_t*) p);
-  p += 2 + value_len;
-  uint64_t next_addr = *((const uint64_t*) p);
-  return next_addr;
 }
 
 inline std::string GetAddressCounterKey(const std::string& stack_name) {
@@ -233,6 +135,30 @@ uint64_t GetNextAddressNumber(const std::string& stack_name) {
   return cur + 1;
 }
 
+std::string EncodeValue(const std::string& value, const uint64_t addr_num) {
+  uint16_t value_len = value.length();
+  size_t encoded_len = 2 + value_len + sizeof(uint64_t);
+  auto buf = std::string(encoded_len, 'X');
+  char* p = const_cast<char*>(buf.data());
+  memcpy(p, &value_len, sizeof(uint16_t));
+  p += sizeof(uint16_t);
+  memcpy(p, value.data(), value_len);
+  p += value_len;
+  memcpy(p, &addr_num, sizeof(uint64_t));
+  return buf;
+}
+
+inline std::string GetAddressKey(const std::string& stack_name, const uint64_t addr_num) {
+  return GetStackNameKey(stack_name) + ":@" + std::to_string(addr_num);
+}
+
+uint64_t ExtractNextAddressNum(const std::string& encoded) {
+  const char* p = encoded.data();
+  uint16_t value_len = *((const uint16_t*) p);
+  p += 2 + value_len;
+  uint64_t next_addr = *((const uint64_t*) p);
+  return next_addr;
+}
 
 void Push(const std::string& stack_name, const std::string& value) {
   auto stack_name_key = GetStackNameKey(stack_name);
@@ -332,8 +258,7 @@ void PrintDecode(const std::string& encoded) {
   std::cout << std::endl;
 }
 
-void Pop(const std::string& stack_name, std::string* value_out) {
-#if 0
+void Pop(const std::string& stack_name) {
   auto stack_name_key = GetStackNameKey(stack_name);
   uint64_t old_top_addr_num;
   kv->GetInt(stack_name_key, &old_top_addr_num);
@@ -368,42 +293,9 @@ void Pop(const std::string& stack_name, std::string* value_out) {
     }
     next_top_addr_num = ExtractNextAddressNum(value_read);
   }
-  const char* p = value_read.data();
-  uint16_t value_len = *((const uint16_t*) p);
-  p += 2;
-  *value_out = std::string(p, value_len);
-  kv->Del(old_top_addr);
-#else
-  auto stack_name_key = GetStackNameKey(stack_name);
-  uint64_t old_top_addr_num;
-  kv->GetInt(stack_name_key, &old_top_addr_num);
-  while (old_top_addr_num != 0) {
-    auto old_top_addr = GetAddressKey(stack_name, old_top_addr_num);
-    std::string value_read;
-    if (kv->Get(old_top_addr, &value_read)) {
-      kv->GetInt(stack_name_key, &old_top_addr_num);
-      continue;
-    }
-    uint64_t next_top_addr_num = ExtractNextAddressNum(value_read);
-    if (!kv->CAS(stack_name_key, next_top_addr_num, old_top_addr_num)) {
-      kv->GetInt(stack_name_key, &old_top_addr_num);
-      continue;
-    } else {
-      const char* p = value_read.data();
-      uint16_t value_len = *((const uint16_t*) p);
-      p += 2;
-      *value_out = std::string(p, value_len);
-      kv->Del(old_top_addr);
-      break;
-    }
-  }
-  if (old_top_addr_num == 0) {
-    std::cerr << "Nothing to pop\n";
-    return;
-  }
-#endif
 }
 
+#if 1
 int main(const int argc, const char* argv[]) {
   if (argc < 5) {
     fprintf(stderr, "Usage: %s <value_size> <num_loads> <num_requests> <num_clients>\n", argv[0]);
@@ -413,6 +305,7 @@ int main(const int argc, const char* argv[]) {
   size_t num_loads = atoll(argv[2]);
   int num_requests = atoi(argv[3]);
   int num_clients = atoi(argv[4]);
+  int num_total_requests = num_requests * num_clients;
 
   printf("=========================================\n");
   printf("Benchmark configuration:\n");
@@ -435,27 +328,32 @@ int main(const int argc, const char* argv[]) {
       // Load
       std::string stack_name = "my_stack";
       std::string value = std::string(value_size, 'a');
-      kv->Load(GetStackNameKey(stack_name), GetAddressCounterKey(stack_name), value, num_loads);
+      for (int i = 0; i < num_loads; i++) {
+        std::string key = "[]:" + stack_name + ":@" + std::to_string(i+1);
+        kv->Put(key, value);
+      }
     }
     {
-      std::cout << "*** PUSH only ***\n";
-      // PUSH-only
+      // PUT-only
+      std::cout << "*** PUT only ***\n";
       float push_ratio = 1.0;
       std::vector<std::thread> clients;
       auto time_begin = std::chrono::system_clock::now();
       for (int i = 0; i < num_clients; i++) {
-        clients.emplace_back([cid=i+1, value_size, num_requests, push_ratio] {
+        clients.emplace_back([cid=i+1, value_size, num_requests, push_ratio, num_total_requests, num_loads] {
               std::mt19937 gen(cid);
               std::uniform_real_distribution<> dis(0.0, 1.0);
+              std::uniform_int_distribution<> dis_put(num_loads+1, num_loads+1+num_total_requests);
               int req_done_cnt = 0;
               std::string stack_name = "my_stack";
               std::string value = std::string(value_size, 'a');
               std::string value_read;
               while (req_done_cnt < num_requests) {
+                std::string key = "[]:" + stack_name + ":@" + std::to_string(dis_put(gen));
                 if (dis(gen) < push_ratio) {
-                  Push(stack_name, value);
+                  kv->Put(key, value);
                 } else {
-                  Pop(stack_name, &value_read);
+                  kv->Get(key, &value_read);
                 }
                 req_done_cnt++;
               }
@@ -476,24 +374,28 @@ int main(const int argc, const char* argv[]) {
       std::cout << "-----------------------------------------\n";
     }
     {
-      std::cout << "*** PUSH:POP = 1:1 ***\n";
       // half-half
+      std::cout << "*** PUT:GET = 1:1 ***\n";
       float push_ratio = 0.5;
       std::vector<std::thread> clients;
       auto time_begin = std::chrono::system_clock::now();
       for (int i = 0; i < num_clients; i++) {
-        clients.emplace_back([cid=i+1, value_size, num_requests, push_ratio] {
+        clients.emplace_back([cid=i+1, value_size, num_requests, push_ratio, num_total_requests, num_loads] {
               std::mt19937 gen(cid);
               std::uniform_real_distribution<> dis(0.0, 1.0);
+              std::uniform_int_distribution<> dis_put(num_loads+1+num_total_requests, num_loads+1+2*num_total_requests);
+              std::uniform_int_distribution<> dis_get(1, num_loads+1+2*num_total_requests);
               int req_done_cnt = 0;
               std::string stack_name = "my_stack";
               std::string value = std::string(value_size, 'a');
               std::string value_read;
               while (req_done_cnt < num_requests) {
                 if (dis(gen) < push_ratio) {
-                  Push(stack_name, value);
+                  std::string key = "[]:" + stack_name + ":@" + std::to_string(dis_put(gen));
+                  kv->Put(key, value);
                 } else {
-                  Pop(stack_name, &value_read);
+                  std::string key = "[]:" + stack_name + ":@" + std::to_string(dis_get(gen));
+                  kv->Get(key, &value_read);
                 }
                 req_done_cnt++;
               }
@@ -514,24 +416,28 @@ int main(const int argc, const char* argv[]) {
       std::cout << "-----------------------------------------\n";
     }
     {
-      std::cout << "*** POP only ***\n";
-      // POP-only
-      float push_ratio = 0.0;
+      // GET only
+      std::cout << "*** GET-only ***\n";
+      float push_ratio = 0;
       std::vector<std::thread> clients;
       auto time_begin = std::chrono::system_clock::now();
       for (int i = 0; i < num_clients; i++) {
-        clients.emplace_back([cid=i+1, value_size, num_requests, push_ratio] {
+        clients.emplace_back([cid=i+1, value_size, num_requests, push_ratio, num_total_requests, num_loads] {
               std::mt19937 gen(cid);
               std::uniform_real_distribution<> dis(0.0, 1.0);
+              std::uniform_int_distribution<> dis_put(num_loads+1+num_total_requests, num_loads+1+2*num_total_requests);
+              std::uniform_int_distribution<> dis_get(1, num_loads+1+2*num_total_requests);
               int req_done_cnt = 0;
               std::string stack_name = "my_stack";
               std::string value = std::string(value_size, 'a');
               std::string value_read;
               while (req_done_cnt < num_requests) {
                 if (dis(gen) < push_ratio) {
-                  Push(stack_name, value);
+                  std::string key = "[]:" + stack_name + ":@" + std::to_string(dis_put(gen));
+                  kv->Put(key, value);
                 } else {
-                  Pop(stack_name, &value_read);
+                  std::string key = "[]:" + stack_name + ":@" + std::to_string(dis_get(gen));
+                  kv->Get(key, &value_read);
                 }
                 req_done_cnt++;
               }
@@ -558,3 +464,145 @@ int main(const int argc, const char* argv[]) {
   cds::Terminate();
   return 0;
 }
+#else
+int main(const int argc, const char* argv[]) {
+  if (argc < 4) {
+    fprintf(stderr, "Usage: %s <value_size> <num_requests> <num_clients>\n", argv[0]);
+    return 1;
+  }
+  int value_size = atoi(argv[1]);
+  int num_requests = atoi(argv[2]);
+  float push_ratio = 1.0;
+  int num_clients = atoi(argv[3]);
+
+  cds::Initialize();
+  {
+    cds::gc::HP hpGC;
+    cds::threading::Manager::attachThread();
+    {
+      // Put prefixed Random
+      kv = new SimpleKV();
+      std::vector<std::thread> clients;
+      for (int i = 0; i < num_clients; i++) {
+        clients.emplace_back([cid=i+1, value_size, num_requests, push_ratio] {
+              std::mt19937 gen(cid);
+              std::uniform_int_distribution<> dis(0, 1000000000);
+              int req_done_cnt = 0;
+              std::string stack_name = "my_stack";
+              std::string value = std::string(value_size, 'a');
+              while (req_done_cnt < num_requests) {
+                std::string key = "[]:" + stack_name + ":@" + std::to_string(dis(gen));
+                kv->Put(key, value);
+                req_done_cnt++;
+              }
+            });
+      }
+      for (auto& c : clients) {
+        if (c.joinable()) {
+          c.join();
+        }
+      }
+      delete kv;
+    }
+    {
+      std::cout << "*** Put Prefixed Random ***\n";
+      // Put prefixed Random
+      kv = new SimpleKV();
+      std::vector<std::thread> clients;
+      auto time_begin = std::chrono::system_clock::now();
+      for (int i = 0; i < num_clients; i++) {
+        clients.emplace_back([cid=i+1, value_size, num_requests, push_ratio] {
+              std::mt19937 gen(cid);
+              std::uniform_int_distribution<> dis(0, 1000000000);
+              int req_done_cnt = 0;
+              std::string stack_name = "my_stack";
+              std::string value = std::string(value_size, 'a');
+              while (req_done_cnt < num_requests) {
+                std::string key = "[]:" + stack_name + ":@" + std::to_string(dis(gen));
+                kv->Put(key, value);
+                req_done_cnt++;
+              }
+            });
+      }
+      for (auto& c : clients) {
+        if (c.joinable()) {
+          c.join();
+        }
+      }
+      auto time_end = std::chrono::system_clock::now();
+      auto dur = std::chrono::duration_cast<std::chrono::microseconds>(time_end - time_begin);
+      double dur_sec = (double) dur.count() / 1000000;
+      std::cout << dur.count() << "usec\n";
+      std::cout << "Throughput: " << num_clients * num_requests / dur_sec / 1000 << " Kops/sec" << std::endl;
+      delete kv;
+    }
+    {
+      std::cout << "*** Put Random ***\n";
+      // Put Random
+      kv = new SimpleKV();
+      std::vector<std::thread> clients;
+      auto time_begin = std::chrono::system_clock::now();
+      for (int i = 0; i < num_clients; i++) {
+        clients.emplace_back([cid=i+1, value_size, num_requests, push_ratio] {
+              std::mt19937 gen(cid);
+              std::uniform_int_distribution<> dis(0, 1000000000);
+              int req_done_cnt = 0;
+              std::string stack_name = "my_stack";
+              std::string value = std::string(value_size, 'a');
+              while (req_done_cnt < num_requests) {
+                std::string key = std::to_string(dis(gen));
+                kv->Put(key, value);
+                req_done_cnt++;
+              }
+            });
+      }
+      for (auto& c : clients) {
+        if (c.joinable()) {
+          c.join();
+        }
+      }
+      auto time_end = std::chrono::system_clock::now();
+      auto dur = std::chrono::duration_cast<std::chrono::microseconds>(time_end - time_begin);
+      double dur_sec = (double) dur.count() / 1000000;
+      std::cout << dur.count() << "usec\n";
+      std::cout << "Throughput: " << num_clients * num_requests / dur_sec / 1000 << " Kops/sec" << std::endl;
+      delete kv;
+    }
+    {
+      kv = new SimpleKV();
+      std::cout << "*** Put Prefixed Sequential ***\n";
+      // Put prefixed Sequential
+      push_ratio = 1.0;
+      std::vector<std::thread> clients;
+      auto time_begin = std::chrono::system_clock::now();
+      for (int i = 0; i < num_clients; i++) {
+        clients.emplace_back([cid=i+1, value_size, num_requests, push_ratio] {
+              int req_done_cnt = 0;
+              std::string stack_name = "my_stack";
+              std::string value = std::string(value_size, 'a');
+              int i = cid * num_requests;
+              while (req_done_cnt < num_requests) {
+                std::string key = "[]:" + stack_name + ":@" + std::to_string(i++);
+                kv->Put(key, value);
+                req_done_cnt++;
+              }
+            });
+      }
+      for (auto& c : clients) {
+        if (c.joinable()) {
+          c.join();
+        }
+      }
+      auto time_end = std::chrono::system_clock::now();
+      auto dur = std::chrono::duration_cast<std::chrono::microseconds>(time_end - time_begin);
+      double dur_sec = (double) dur.count() / 1000000;
+      std::cout << dur.count() << "usec\n";
+      std::cout << "Throughput: " << num_clients * num_requests / dur_sec / 1000 << " Kops/sec" << std::endl;
+      delete kv;
+    }
+  }
+
+  cds::Terminate();
+  return 0;
+}
+#endif

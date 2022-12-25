@@ -49,14 +49,14 @@ def extract_address_num(kv_address):
   return None
 
 def decode_value(encoded):
-  value_len = int.from_bytes(encoded[:2], "big")
+  value_len = int.from_bytes(encoded[:2], "big", signed=False)
   value = encoded[2:2+value_len].decode()
-  next_addr = int.from_bytes(encoded[2+value_len:], "big")
+  next_addr = int.from_bytes(encoded[2+value_len:], "big", signed=False)
   return value_len, value, next_addr
 
 def extract_next_address_num(encoded):
-  value_len = int.from_bytes(encoded[:2], "big")
-  next_addr = int.from_bytes(encoded[2+value_len:], "big")
+  value_len = int.from_bytes(encoded[:2], "big", signed=False)
+  next_addr = int.from_bytes(encoded[2+value_len:], "big", signed=False)
   return next_addr
 
 def inc(key):
@@ -87,6 +87,8 @@ def push(stackName, value):
     raise Exception("stack entry size exceeded 32K.")
   # Try to get current top address.
   stack_name_key = get_stack_name_key(stackName)
+  addr_counter_key = get_address_counter_key(stackName)
+  # Create a new stack if it does not exist
   old_top_addr_num, _ = kv.get_int(stack_name_key)
   if old_top_addr_num == None:
     # The stack does not exist. Creat a new one.
@@ -95,11 +97,10 @@ def push(stackName, value):
     old_top_addr_num, _ = kv.get_int(stack_name_key)
     if old_top_addr_num == None:
       kv.put(stack_name_key, 0)
-      addr_counter_key = get_address_counter_key(stackName)
       kv.put(addr_counter_key, 0)
       old_top_addr_num = 0
-    while not kv.cas("STACK_CREATION_LOCK", 0, 1):
-      continue
+    if not kv.cas("STACK_CREATION_LOCK", 0, 1):
+      raise Exception("Creation lock is modified by another client before relased!")
   # Allocate address for the new stack entry from the address counter
   new_entry_addr_num = get_next_address_number(stackName)
   new_entry_addr = get_address_key(stackName, new_entry_addr_num)
@@ -114,40 +115,48 @@ def push(stackName, value):
     kv.put(new_entry_addr, encoded_value)
 
 def pop(stackName):
-  # Try to get current top address.
+  if not isinstance(stackName, str):
+    raise Exception("stackName is not str.")
+  if stackName.startswith("[]:"):
+    raise Exception("stackName starts with \"[]:\"")
   stack_name_key = get_stack_name_key(stackName)
+  addr_counter_key = get_address_counter_key(stackName)
+  # Create a new stack if it does not exist
   old_top_addr_num, _ = kv.get_int(stack_name_key)
   if old_top_addr_num == None:
-    # The stack does not exist. Creat a new one.
     while not kv.cas("STACK_CREATION_LOCK", 1, 0):
       continue
     old_top_addr_num, _ = kv.get_int(stack_name_key)
     if old_top_addr_num == None:
       kv.put(stack_name_key, 0)
-      addr_counter_key = get_address_counter_key(stackName)
       kv.put(addr_counter_key, 0)
       old_top_addr_num = 0
-    while not kv.cas("STACK_CREATION_LOCK", 0, 1):
-      continue
-  if old_top_addr_num == 0:
-    return
-  # Get current top
-  old_top_addr = get_address_key(stackName, old_top_addr_num)
-  ret, _ = kv.get(old_top_addr)
-  if ret == None:
-    # error
-    raise Exception("No key in KV. stack entry address: " + old_top_addr)
-  next_top_addr_num = extract_next_address_num(bytes(ret))
-  # Try CAS top
-  while not kv.cas(stack_name_key, next_top_addr_num, old_top_addr_num):
-    old_top_addr_num, _ = kv.get_int(stack_name_key)
-    if old_top_addr_num == 0:
-      return
+    if not kv.cas("STACK_CREATION_LOCK", 0, 1):
+      raise Exception("Creation lock is modified by another client before relased!")
+  ret = None
+  # Step 1. Fetch the current top address
+  # ... Skip
+  while old_top_addr_num != 0:
+    # Step 2. Assemble the address key for the current top
     old_top_addr = get_address_key(stackName, old_top_addr_num)
-    ret, _ = kv.get(old_top_addr)
-    if ret == None:
-      raise Exception("No key in KV. stack entry address: " + old_top_addr)
-    next_top_addr_num = extract_next_address_num(bytes(ret))
+    # Step 3. Read the top entry
+    encoded, _ = kv.get(old_top_addr)
+    if encoded == None:
+      old_top_addr_num, _ = kv.get_int(stack_name_key)
+      continue
+    # Step 4. Decode the value read to get the next entry address number
+    next_top_addr_num = extract_next_address_num(encoded)
+    # Step 5. Try CAS top
+    if not kv.cas(stack_name_key, next_top_addr_num, old_top_addr_num):
+      old_top_addr_num, _ = kv.get_int(stack_name_key)
+      continue
+    else:
+      kv.Del(old_top_addr)
+      _, ret, _ = decode_value(encoded)
+      break
+  if old_top_addr_num == 0:
+    print("Pop: Stack is empty!!!")
+  return ret
 
 if __name__ == "__main__":
   if len(sys.argv) < 5:
@@ -164,7 +173,6 @@ if __name__ == "__main__":
 
   req_done_cnt = 0
   while req_done_cnt < benchamrk_num_requests:
-    # ....
     if random.random() < benchmark_push_ratio:
       push(stack_name, value)
     else:

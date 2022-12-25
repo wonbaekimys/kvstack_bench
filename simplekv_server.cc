@@ -18,12 +18,41 @@ class SimpleKVServiceImpl final : public simplekv::SimpleKV::Service {
     if (!cds::threading::Manager::isThreadAttached()) {
       cds::threading::Manager::attachThread();
     }
+#if 1
     if (!map_.emplace(req->key(), req->value(), std::time(nullptr))) {
       auto ret = map_.update(req->key(), [&](map_type::value_type& item, map_type::value_type* old) {
           item.second.first = req->value();
           item.second.second = std::time(nullptr);
         });
     }
+#else
+    auto ret = map_.update(req->key(), [&](map_type::value_type& item, map_type::value_type* old) {
+        item.second.first = req->value();
+        item.second.second = std::time(nullptr);
+      });
+#endif
+    return grpc::Status::OK;
+  }
+
+  grpc::Status PutInt(grpc::ServerContext* ctx, const simplekv::PutIntRequest* req,
+                      simplekv::PutReply* rep) override {
+    // Attach the thread if it is not attached yet
+    if (!cds::threading::Manager::isThreadAttached()) {
+      cds::threading::Manager::attachThread();
+    }
+#if 1
+    if (!map_int_.emplace(req->key(), req->value(), std::time(nullptr))) {
+      auto ret = map_int_.update(req->key(), [&](map_type_int::value_type& item, map_type_int::value_type* old) {
+          item.second.first = req->value();
+          item.second.second = std::time(nullptr);
+        });
+    }
+#else
+    auto ret = map_int_.update(req->key(), [&](map_type_int::value_type& item, map_type_int::value_type* old) {
+        item.second.first = req->value();
+        item.second.second = std::time(nullptr);
+      });
+#endif
     return grpc::Status::OK;
   }
 
@@ -40,31 +69,6 @@ class SimpleKVServiceImpl final : public simplekv::SimpleKV::Service {
     } else {
       rep->set_value("");
       rep->set_timestamp(0);
-    }
-    return grpc::Status::OK;
-  }
-
-  grpc::Status Del(grpc::ServerContext* ctx, const simplekv::DelRequest* req,
-                   simplekv::DelReply* rep) override {
-    // Attach the thread if it is not attached yet
-    if (!cds::threading::Manager::isThreadAttached()) {
-      cds::threading::Manager::attachThread();
-    }
-    bool result = map_.erase(req->key());
-    return grpc::Status::OK;
-  }
-
-  grpc::Status PutInt(grpc::ServerContext* ctx, const simplekv::PutIntRequest* req,
-                      simplekv::PutReply* rep) override {
-    // Attach the thread if it is not attached yet
-    if (!cds::threading::Manager::isThreadAttached()) {
-      cds::threading::Manager::attachThread();
-    }
-    if (!map_int_.emplace(req->key(), req->value(), std::time(nullptr))) {
-      auto ret = map_int_.update(req->key(), [&](map_type_int::value_type& item, map_type_int::value_type* old) {
-          item.second.first = req->value();
-          item.second.second = std::time(nullptr);
-        });
     }
     return grpc::Status::OK;
   }
@@ -86,6 +90,16 @@ class SimpleKVServiceImpl final : public simplekv::SimpleKV::Service {
     return grpc::Status::OK;
   }
 
+  grpc::Status Del(grpc::ServerContext* ctx, const simplekv::DelRequest* req,
+                   simplekv::DelReply* rep) override {
+    // Attach the thread if it is not attached yet
+    if (!cds::threading::Manager::isThreadAttached()) {
+      cds::threading::Manager::attachThread();
+    }
+    bool result = map_.erase(req->key());
+    return grpc::Status::OK;
+  }
+
   grpc::Status CAS(grpc::ServerContext* ctx, const simplekv::CASRequest* req,
                    simplekv::CASReply* rep) override {
     // Attach the thread if it is not attached yet
@@ -100,6 +114,78 @@ class SimpleKVServiceImpl final : public simplekv::SimpleKV::Service {
       rep->set_success(result);
     } else {
       rep->set_success(false);
+    }
+    return grpc::Status::OK;
+  }
+
+  std::string EncodeValue(const std::string& value, const uint64_t addr_num) {
+    uint16_t value_len = value.length();
+    size_t encoded_len = 2 + value_len + sizeof(uint64_t);
+    auto buf = std::string(encoded_len, 'X');
+    char* p = const_cast<char*>(buf.data());
+    memcpy(p, &value_len, sizeof(uint16_t));
+    p += sizeof(uint16_t);
+    memcpy(p, value.data(), value_len);
+    p += value_len;
+    memcpy(p, &addr_num, sizeof(uint64_t));
+    return buf;
+  }
+
+  grpc::Status Load(grpc::ServerContext* ctx, const simplekv::LoadRequest* req,
+                    simplekv::PutReply* rep) override {
+    // Attach the thread if it is not attached yet
+    if (!cds::threading::Manager::isThreadAttached()) {
+      cds::threading::Manager::attachThread();
+    }
+    uint64_t old_top_addr_num = 0;
+    // Create table if not existing
+    map_type_int::guarded_ptr gp(map_int_.get(req->stack_key()));
+    if (!gp) {
+      // Primary
+      map_int_.emplace(req->stack_key(), 0, std::time(nullptr));
+      // Alloc Counter
+      map_int_.emplace(req->stack_counter_key(), 0, std::time(nullptr));
+    }
+
+    for (int i = 0; i < req->num_loads(); i++) {
+      if (auto gp = map_type_int::guarded_ptr(map_int_.get(req->stack_key()))) {
+        old_top_addr_num = gp->second.first;
+      }
+      // alloc counter
+      uint64_t new_entry_addr_num = 0;
+      if (auto gp = map_type_int::guarded_ptr(map_int_.get(req->stack_counter_key()))) {
+        auto before = ((std::atomic<uint64_t>*) &gp->second.first)->fetch_add(1);
+        new_entry_addr_num = before + 1;
+      }
+      // new entry
+      auto new_entry_addr = req->stack_key() + ":@" + std::to_string(new_entry_addr_num);
+      auto encoded_value = EncodeValue(req->value(), old_top_addr_num);
+      auto ret = map_.update(new_entry_addr, [&](map_type::value_type& item, map_type::value_type* old) {
+          item.second.first = encoded_value;
+          item.second.second = std::time(nullptr);
+        });
+      while (true) {
+        bool result = false;
+        if (auto gp = map_type_int::guarded_ptr(map_int_.get(req->stack_key()))) {
+          uint64_t expected = old_top_addr_num;
+          result = ((std::atomic<uint64_t>*) &gp->second.first)->compare_exchange_strong(
+              expected, new_entry_addr_num);
+        }
+        if (result) {
+          //std::cout << i << "key: " << new_entry_addr << ", value: " << encoded_value << std::endl;
+          break;
+        }
+        if (auto gp = map_type_int::guarded_ptr(map_int_.get(req->stack_key()))) {
+          old_top_addr_num = gp->second.first;
+        }
+        char* p = const_cast<char*>(encoded_value.data());
+        p += 2 + req->value().length();
+        memcpy(p, &old_top_addr_num, sizeof(uint64_t));
+        ret = map_.update(new_entry_addr, [&](map_type::value_type& item, map_type::value_type* old) {
+            item.second.first = encoded_value;
+            item.second.second = std::time(nullptr);
+          });
+      }
     }
     return grpc::Status::OK;
   }

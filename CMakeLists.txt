@@ -166,19 +166,25 @@ target_link_libraries(simplekv_server
 # benchmark
 get_filename_component(kvstack_bench_py_src "kvstack_bench.py" ABSOLUTE)
 get_filename_component(kvstack_init_lock_py_src "kvstack_init_lock.py" ABSOLUTE)
+get_filename_component(kvstack_load_py_src "kvstack_load.py" ABSOLUTE)
 get_filename_component(benchmark_run_script_src "scripts/run_benchmark.sh" ABSOLUTE)
 set(kvstack_bench_py "${CMAKE_CURRENT_BINARY_DIR}/kvstack_bench.py")
 set(kvstack_init_lock_py "${CMAKE_CURRENT_BINARY_DIR}/kvstack_init_lock.py")
+set(kvstack_load_py "${CMAKE_CURRENT_BINARY_DIR}/kvstack_load.py")
 set(benchmark_run_script "${CMAKE_CURRENT_BINARY_DIR}/run_benchmark.sh")
 configure_file("${kvstack_bench_py_src}" "${kvstack_bench_py}" COPYONLY)
 configure_file("${kvstack_init_lock_py_src}" "${kvstack_init_lock_py}" COPYONLY)
+configure_file("${kvstack_load_py_src}" "${kvstack_load_py}" COPYONLY)
 configure_file("${benchmark_run_script_src}" "${benchmark_run_script}" COPYONLY)
 
 # local benchmark
 add_executable(kvstack_local_test "kvstack_local_test.cc")
 target_link_libraries(kvstack_local_test
-    simplekv_grpc_proto
-    ${_REFLECTION}
-    ${_GRPC_GRPCPP}
-    ${_PROTOBUF_LIBPROTOBUF}
+    pthread
+    ~/.local/lib/libcds.so)
+
+# simplekv loal benchmark
+add_executable(simplekv_test "simplekv_test.cc")
+target_link_libraries(simplekv_test
+    pthread
     ~/.local/lib/libcds.so)

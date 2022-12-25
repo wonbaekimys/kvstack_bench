@@ -3,12 +3,15 @@
 set -e
 set -o pipefail
 
-if [ $# -ne 2 ]; then
-  echo "Usage: $0 <server_address:port> <num_clients>"
+if [ $# -lt 5 ]; then
+  echo "Usage: $0 <server_address=host:port> <value_size> <num_loads> <num_requests> <num_clients>"
   exit 1
 fi
 server_address=$1
-num_clients=$2
+value_size=$2
+num_loads=$3
+num_requests=$4
+num_clients=$5
 server_host=$(echo $server_address | cut -d ":" -f 1)
 server_port=$(echo $server_address | cut -d ":" -f 2)
 server_exec=$(realpath simplekv_server)
@@ -16,23 +19,18 @@ client_exec=$(realpath kvstack_bench.py)
 
 python3 kvstack_init_lock.py $server_address
 
-value_size=100
-num_requests=1000
 echo "========================================="
 echo "Benchmark configuration:"
 echo "  value_size: $value_size"
+echo "  num_loads: $num_loads"
 echo "  num_requests (per client): $num_requests"
 echo "  num_clients: $num_clients"
 echo "  toal requests: $((num_clients*num_requests))"
 echo "-----------------------------------------"
 #################################################
 sleep 1
-echo "*** Warming Up ***"
-push_ratio=1
-for ((i=0;i<num_clients;i++)); do
-  python3 kvstack_bench.py $server_address $value_size $num_requests $push_ratio &
-done
-wait
+echo "*** Load ***"
+python3 kvstack_load.py $server_address "my_stack" $value_size $num_loads
 #################################################
 sleep 1
 echo "*** PUSH only ***"
