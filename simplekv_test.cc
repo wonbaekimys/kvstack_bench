@@ -87,9 +87,37 @@ class SimpleKV {
     map_type_int::guarded_ptr gp(map_int_.get(key));
     if (gp) {
       uint64_t expected = orig;
+#if 0
+      bool result = ((std::atomic<uint64_t>*) &(gp->second.first))->compare_exchange_weak(
+          expected, value,
+          std::memory_order_release,
+          std::memory_order_relaxed);
+#else
       bool result = ((std::atomic<uint64_t>*) &(gp->second.first))->compare_exchange_strong(
           expected, value);
+#endif
       return result;
+    } else {
+      return false;
+    }
+  }
+
+  bool CAS_repeat(const std::string& key, const uint64_t value, const uint64_t orig) {
+    // Attach the thread if it is not attached yet
+    if (!cds::threading::Manager::isThreadAttached()) {
+      cds::threading::Manager::attachThread();
+    }
+    map_type_int::guarded_ptr gp(map_int_.get(key));
+    if (gp) {
+      uint64_t desired = value;
+      uint64_t expected = orig;
+      while (!((std::atomic<uint64_t>*) &(gp->second.first))->compare_exchange_weak(
+          expected, desired,
+          std::memory_order_release,
+          std::memory_order_relaxed)) {
+        desired = expected + 1;
+      }
+      return true; 
     } else {
       return false;
     }
@@ -457,7 +485,124 @@ int main(const int argc, const char* argv[]) {
       std::cout << "Throughput: " << thpt << " Kops/sec" << std::endl;
       std::cout << "-----------------------------------------\n";
     }
-    std::cout << thpts[0] << "	" << thpts[1] << "	" << thpts[2] << std::endl;
+    {
+      // Del-only
+      std::cout << "*** DEL-only ***\n";
+      float push_ratio = 0;
+      std::vector<std::thread> clients;
+      auto time_begin = std::chrono::system_clock::now();
+      for (int i = 0; i < num_clients; i++) {
+        clients.emplace_back([cid=i+1, value_size, num_requests, push_ratio, num_total_requests, num_loads] {
+              std::mt19937 gen(cid);
+              std::uniform_real_distribution<> dis(0.0, 1.0);
+              std::uniform_int_distribution<> dis_del(1, num_loads);
+              int req_done_cnt = 0;
+              std::string stack_name = "my_stack";
+              std::string value = std::string(value_size, 'a');
+              while (req_done_cnt < num_requests) {
+                std::string key = "[]:" + stack_name + ":@" + std::to_string(dis_del(gen));
+                kv->Del(key);
+                req_done_cnt++;
+              }
+            });
+      }
+      for (auto& c : clients) {
+        if (c.joinable()) {
+          c.join();
+        }
+      }
+      auto time_end = std::chrono::system_clock::now();
+      auto dur = std::chrono::duration_cast<std::chrono::microseconds>(time_end - time_begin);
+      double dur_sec = (double) dur.count() / 1000000;
+      double thpt = num_clients * num_requests / dur_sec / 1000;
+      thpts.push_back(thpt);
+      std::cout << "Elapsed time: " << dur_sec << "sec\n";
+      std::cout << "Throughput: " << thpt << " Kops/sec" << std::endl;
+      std::cout << "-----------------------------------------\n";
+    }
+    {
+      // CAS-only
+      std::cout << "*** CAS-only ***\n";
+      float push_ratio = 0;
+      kv->PutInt("my_key", 0);
+      std::vector<std::thread> clients;
+      auto time_begin = std::chrono::system_clock::now();
+      for (int i = 0; i < num_clients; i++) {
+        clients.emplace_back([cid=i+1, value_size, num_requests, push_ratio, num_total_requests, num_loads] {
+              std::mt19937 gen(cid);
+              std::uniform_real_distribution<> dis(0.0, 1.0);
+              std::uniform_int_distribution<> dis_del(1, num_loads);
+              int req_done_cnt = 0;
+              std::string stack_name = "my_stack";
+              std::string value = std::string(value_size, 'a');
+              uint64_t value_read;
+              while (req_done_cnt < num_requests) {
+                kv->GetInt("my_key", &value_read);
+                while (!kv->CAS("my_key", value_read + 1, value_read)) {
+                  kv->GetInt("my_key", &value_read);
+                }
+                req_done_cnt++;
+              }
+            });
+      }
+      for (auto& c : clients) {
+        if (c.joinable()) {
+          c.join();
+        }
+      }
+      auto time_end = std::chrono::system_clock::now();
+      auto dur = std::chrono::duration_cast<std::chrono::microseconds>(time_end - time_begin);
+      double dur_sec = (double) dur.count() / 1000000;
+      double thpt = num_clients * num_requests / dur_sec / 1000;
+      thpts.push_back(thpt);
+      std::cout << "Elapsed time: " << dur_sec << "sec\n";
+      std::cout << "Throughput: " << thpt << " Kops/sec" << std::endl;
+      std::cout << "-----------------------------------------\n";
+    }
+    {
+      // CAS-only
+      std::cout << "*** CAS(optimized) ***\n";
+      float push_ratio = 0;
+      kv->PutInt("my_key_opt", 0);
+      std::vector<std::thread> clients;
+      auto time_begin = std::chrono::system_clock::now();
+      for (int i = 0; i < num_clients; i++) {
+        clients.emplace_back([cid=i+1, value_size, num_requests, push_ratio, num_total_requests, num_loads] {
+              std::mt19937 gen(cid);
+              std::uniform_real_distribution<> dis(0.0, 1.0);
+              std::uniform_int_distribution<> dis_del(1, num_loads);
+              int req_done_cnt = 0;
+              std::string stack_name = "my_stack";
+              std::string value = std::string(value_size, 'a');
+              uint64_t value_read;
+              while (req_done_cnt < num_requests) {
+                kv->GetInt("my_key", &value_read);
+                while (!kv->CAS("my_key", value_read + 1, value_read)) {
+                  kv->GetInt("my_key", &value_read);
+                }
+                req_done_cnt++;
+              }
+            });
+      }
+      for (auto& c : clients) {
+        if (c.joinable()) {
+          c.join();
+        }
+      }
+      auto time_end = std::chrono::system_clock::now();
+      auto dur = std::chrono::duration_cast<std::chrono::microseconds>(time_end - time_begin);
+      double dur_sec = (double) dur.count() / 1000000;
+      double thpt = num_clients * num_requests / dur_sec / 1000;
+      thpts.push_back(thpt);
+      std::cout << "Elapsed time: " << dur_sec << "sec\n";
+      std::cout << "Throughput: " << thpt << " Kops/sec" << std::endl;
+      std::cout << "-----------------------------------------\n";
+    }
+    for (auto thpt : thpts) {
+      std::cout << thpt << "	";
+    }
+    std::cout << std::endl;
+    //std::cout << thpts[0] << "	" << thpts[1] << "	" << thpts[2] << "	" << thpts[3] << std::endl;
     printf("=========================================\n");
   }
 
