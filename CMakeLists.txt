@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.24.2)
 project(KVStackBenchmark C CXX)
 
 if (NOT DEFINED CMAKE_CXX_STANDARD)
-  set (CMAKE_CXX_STANDARD 14)
+  set (CMAKE_CXX_STANDARD 17)
 endif()
 
 set(CMAKE_BUILD_TYPE "Release")
@@ -177,14 +177,20 @@ configure_file("${kvstack_init_lock_py_src}" "${kvstack_init_lock_py}" COPYONLY)
 configure_file("${kvstack_load_py_src}" "${kvstack_load_py}" COPYONLY)
 configure_file("${benchmark_run_script_src}" "${benchmark_run_script}" COPYONLY)
 
-# local benchmark
+# kvstack local benchmark
 add_executable(kvstack_local_test "kvstack_local_test.cc")
 target_link_libraries(kvstack_local_test
     pthread
     ~/.local/lib/libcds.so)
+add_executable(kvstack_mutex_local_test "kvstack_mutex_local_test.cc")
+target_link_libraries(kvstack_mutex_local_test
+    pthread)
 
-# simplekv loal benchmark
+# simplekv local benchmark
 add_executable(simplekv_test "simplekv_test.cc")
 target_link_libraries(simplekv_test
     pthread
     ~/.local/lib/libcds.so)
+add_executable(simplekv_mutex_test "simplekv_mutex_test.cc")
+target_link_libraries(simplekv_mutex_test
+    pthread)

@@ -115,7 +115,6 @@ class SimpleKV {
           expected, desired,
           std::memory_order_release,
           std::memory_order_relaxed)) {
-        desired = expected + 1;
       }
       return true; 
     } else {
@@ -523,23 +522,22 @@ int main(const int argc, const char* argv[]) {
     {
       // CAS-only
       std::cout << "*** CAS-only ***\n";
-      float push_ratio = 0;
-      kv->PutInt("my_key", 0);
+      std::string key = "cas_test_key";
+      kv->PutInt(key, 0);
       std::vector<std::thread> clients;
       auto time_begin = std::chrono::system_clock::now();
       for (int i = 0; i < num_clients; i++) {
-        clients.emplace_back([cid=i+1, value_size, num_requests, push_ratio, num_total_requests, num_loads] {
+        clients.emplace_back([cid=i+1, value_size, num_requests, num_total_requests, num_loads, key] {
               std::mt19937 gen(cid);
-              std::uniform_real_distribution<> dis(0.0, 1.0);
-              std::uniform_int_distribution<> dis_del(1, num_loads);
+              std::uniform_int_distribution<uint64_t> dis_desired(1, std::numeric_limits<uint64_t>::max());
               int req_done_cnt = 0;
               std::string stack_name = "my_stack";
-              std::string value = std::string(value_size, 'a');
               uint64_t value_read;
               while (req_done_cnt < num_requests) {
-                kv->GetInt("my_key", &value_read);
-                while (!kv->CAS("my_key", value_read + 1, value_read)) {
-                  kv->GetInt("my_key", &value_read);
+                uint64_t desired = dis_desired(gen);
+                kv->GetInt(key, &value_read);
+                while (!kv->CAS(key, desired, value_read)) {
+                  kv->GetInt(key, &value_read);
                 }
                 req_done_cnt++;
               }
@@ -560,26 +558,24 @@ int main(const int argc, const char* argv[]) {
       std::cout << "-----------------------------------------\n";
     }
     {
-      // CAS-only
+      // CAS(opt)
       std::cout << "*** CAS(optimized) ***\n";
-      float push_ratio = 0;
-      kv->PutInt("my_key_opt", 0);
+      std::string key = "cas_opt_test_key";
+      kv->PutInt(key, 0);
       std::vector<std::thread> clients;
       auto time_begin = std::chrono::system_clock::now();
       for (int i = 0; i < num_clients; i++) {
-        clients.emplace_back([cid=i+1, value_size, num_requests, push_ratio, num_total_requests, num_loads] {
+        clients.emplace_back([cid=i+1, value_size, num_requests, num_total_requests, num_loads, key] {
               std::mt19937 gen(cid);
               std::uniform_real_distribution<> dis(0.0, 1.0);
-              std::uniform_int_distribution<> dis_del(1, num_loads);
+              std::uniform_int_distribution<uint64_t> dis_desired(1, std::numeric_limits<uint64_t>::max());
               int req_done_cnt = 0;
               std::string stack_name = "my_stack";
               std::string value = std::string(value_size, 'a');
               uint64_t value_read;
               while (req_done_cnt < num_requests) {
-                kv->GetInt("my_key", &value_read);
-                while (!kv->CAS("my_key", value_read + 1, value_read)) {
-                  kv->GetInt("my_key", &value_read);
-                }
+                kv->GetInt(key, &value_read);
+                kv->CAS_repeat(key, dis_desired(gen), value_read);
                 req_done_cnt++;
               }
             });
