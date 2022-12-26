@@ -3,8 +3,8 @@
 set -e
 set -o pipefail
 
-if [ $# -lt 5 ]; then
-  echo "Usage: $0 <server_address=host:port> <value_size> <num_loads> <num_requests> <num_clients>"
+if [ $# -lt 6 ]; then
+  echo "Usage: $0 <server_address=host:port> <value_size> <num_loads> <num_requests> <num_clients> <num_stacks>"
   exit 1
 fi
 server_address=$1
@@ -12,6 +12,7 @@ value_size=$2
 num_loads=$3
 num_requests=$4
 num_clients=$5
+num_stacks=$6
 server_host=$(echo $server_address | cut -d ":" -f 1)
 server_port=$(echo $server_address | cut -d ":" -f 2)
 server_exec=$(realpath simplekv_server)
@@ -30,14 +31,14 @@ echo "-----------------------------------------"
 #################################################
 sleep 1
 echo "*** Load ***"
-python3 kvstack_load.py $server_address "my_stack" $value_size $num_loads
+python3 kvstack_load.py $server_address "my_stack" $value_size $num_loads $num_stacks
 #################################################
 sleep 1
 echo "*** PUSH only ***"
 push_ratio=1
 START_TIME=$(echo $(($(date +%s%N))))
 for ((i=0;i<num_clients;i++)); do
-  python3 kvstack_bench.py $server_address $value_size $num_requests $push_ratio &
+  python3 kvstack_bench.py $server_address $value_size $num_requests $push_ratio $num_stacks &
 done
 wait
 END_TIME=$(echo $(($(date +%s%N))))
@@ -53,7 +54,7 @@ echo "*** PUSH:POP = 1:1 ***"
 push_ratio=0.5
 START_TIME=$(echo $(($(date +%s%N))))
 for ((i=0;i<num_clients;i++)); do
-  python3 kvstack_bench.py $server_address $value_size $num_requests $push_ratio &
+  python3 kvstack_bench.py $server_address $value_size $num_requests $push_ratio $num_stacks &
 done
 wait
 END_TIME=$(echo $(($(date +%s%N))))
@@ -69,7 +70,7 @@ echo "*** POP only ***"
 push_ratio=0
 START_TIME=$(echo $(($(date +%s%N))))
 for ((i=0;i<num_clients;i++)); do
-  python3 kvstack_bench.py $server_address $value_size $num_requests $push_ratio &
+  python3 kvstack_bench.py $server_address $value_size $num_requests $push_ratio $num_stacks &
 done
 wait
 END_TIME=$(echo $(($(date +%s%N))))

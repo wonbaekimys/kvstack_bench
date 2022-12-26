@@ -151,28 +151,32 @@ def pop(stackName):
       old_top_addr_num, _ = kv.get_int(stack_name_key)
       continue
     else:
-      kv.Del(old_top_addr)
-      _, ret, _ = decode_value(encoded)
+      #kv.Del(old_top_addr)
+      try:
+        _, ret, _ = decode_value(encoded)
+      except Exception as e: 
+        pass
       break
   if old_top_addr_num == 0:
     print("Pop: Stack is empty!!!")
   return ret
 
 if __name__ == "__main__":
-  if len(sys.argv) < 5:
-    print("Usage: " + sys.argv[0] + " <server_address> <value_size> <num_requests> <push_ratio>")
+  if len(sys.argv) < 6:
+    print("Usage: " + sys.argv[0] + " <server_address> <value_size> <num_requests> <push_ratio> <num_stacks>")
     exit(1)
 
   kv = SimpleKVClient(sys.argv[1])
   benchmark_value_size = int(sys.argv[2])
   benchamrk_num_requests = int(sys.argv[3])
   benchmark_push_ratio = float(sys.argv[4])
+  num_stacks = int(sys.argv[5])
 
-  stack_name = "my_stack"
   value = 'a' * benchmark_value_size
 
   req_done_cnt = 0
   while req_done_cnt < benchamrk_num_requests:
+    stack_name = "my_stack_" + str(random.randrange(1, num_stacks+1))
     if random.random() < benchmark_push_ratio:
       push(stack_name, value)
     else:

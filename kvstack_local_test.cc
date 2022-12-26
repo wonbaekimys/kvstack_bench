@@ -10,6 +10,8 @@
 #include <cds/container/feldman_hashmap_hp.h>
 #include <cds/container/details/feldman_hashmap_base.h>
 
+std::mutex global_mu;
+
 std::string EncodeValue(const std::string& value, const uint64_t addr_num) {
   uint16_t value_len = value.length();
   size_t encoded_len = 2 + value_len + sizeof(uint64_t);
@@ -132,6 +134,7 @@ class SimpleKV {
     // Create table if not existing
     map_type_int::guarded_ptr gp(map_int_.get(stack_name_key));
     if (!gp) {
+      std::unique_lock<std::mutex> lk(global_mu);
       // Primary
       map_int_.emplace(stack_name_key, 0, std::time(nullptr));
       // Alloc Counter
@@ -194,7 +197,6 @@ class SimpleKV {
   map_type_int map_int_;
 };
 
-std::mutex global_mu;
 SimpleKV* kv;
 
 inline std::string GetStackNameKey(const std::string& stack_name) {
@@ -405,14 +407,15 @@ void Pop(const std::string& stack_name, std::string* value_out) {
 }
 
 int main(const int argc, const char* argv[]) {
-  if (argc < 5) {
-    fprintf(stderr, "Usage: %s <value_size> <num_loads> <num_requests> <num_clients>\n", argv[0]);
+  if (argc < 6) {
+    fprintf(stderr, "Usage: %s <value_size> <num_loads> <num_requests> <num_clients> <num_stacks>\n", argv[0]);
     return 1;
   }
   int value_size = atoi(argv[1]);
   size_t num_loads = atoll(argv[2]);
   int num_requests = atoi(argv[3]);
   int num_clients = atoi(argv[4]);
+  int num_stacks = atoi(argv[5]);
 
   printf("=========================================\n");
   printf("Benchmark configuration:\n");
@@ -433,9 +436,27 @@ int main(const int argc, const char* argv[]) {
     {
       std::cout << "*** Load ***\n";
       // Load
-      std::string stack_name = "my_stack";
-      std::string value = std::string(value_size, 'a');
-      kv->Load(GetStackNameKey(stack_name), GetAddressCounterKey(stack_name), value, num_loads);
+#if 1
+      std::vector<std::thread> loaders;
+      for (int i = 0; i < num_stacks; i++) {
+        loaders.emplace_back([&, cid=i+1]{
+              std::string stack_name = "my_stack_" + std::to_string(cid);
+              std::string value = std::string(value_size, 'a');
+              kv->Load(GetStackNameKey(stack_name), GetAddressCounterKey(stack_name), value, num_loads / num_stacks);
+            });
+      }
+      for (auto& t : loaders) {
+        if (t.joinable()) {
+          t.join();
+        }
+      }
+#else
+      for (int i = 0; i < num_stacks; i++) {
+        std::string stack_name = "my_stack_" + std::to_string(i+1);
+        std::string value = std::string(value_size, 'a');
+        kv->Load(GetStackNameKey(stack_name), GetAddressCounterKey(stack_name), value, num_loads/num_stacks);
+      }
+#endif
     }
     {
       std::cout << "*** PUSH only ***\n";
@@ -444,14 +465,15 @@ int main(const int argc, const char* argv[]) {
       std::vector<std::thread> clients;
       auto time_begin = std::chrono::system_clock::now();
       for (int i = 0; i < num_clients; i++) {
-        clients.emplace_back([cid=i+1, value_size, num_requests, push_ratio] {
+        clients.emplace_back([cid=i+1, value_size, num_requests, push_ratio, num_stacks] {
               std::mt19937 gen(cid);
               std::uniform_real_distribution<> dis(0.0, 1.0);
+              std::uniform_int_distribution<> dis_stack(1, num_stacks);
               int req_done_cnt = 0;
-              std::string stack_name = "my_stack";
               std::string value = std::string(value_size, 'a');
               std::string value_read;
               while (req_done_cnt < num_requests) {
+                std::string stack_name = "my_stack_" + std::to_string(dis_stack(gen));
                 if (dis(gen) < push_ratio) {
                   Push(stack_name, value);
                 } else {
@@ -482,14 +504,15 @@ int main(const int argc, const char* argv[]) {
       std::vector<std::thread> clients;
       auto time_begin = std::chrono::system_clock::now();
       for (int i = 0; i < num_clients; i++) {
-        clients.emplace_back([cid=i+1, value_size, num_requests, push_ratio] {
+        clients.emplace_back([cid=i+1, value_size, num_requests, push_ratio, num_stacks] {
               std::mt19937 gen(cid);
               std::uniform_real_distribution<> dis(0.0, 1.0);
+              std::uniform_int_distribution<> dis_stack(1, num_stacks);
               int req_done_cnt = 0;
-              std::string stack_name = "my_stack";
               std::string value = std::string(value_size, 'a');
               std::string value_read;
               while (req_done_cnt < num_requests) {
+                std::string stack_name = "my_stack_" + std::to_string(dis_stack(gen));
                 if (dis(gen) < push_ratio) {
                   Push(stack_name, value);
                 } else {
@@ -520,14 +543,15 @@ int main(const int argc, const char* argv[]) {
       std::vector<std::thread> clients;
       auto time_begin = std::chrono::system_clock::now();
       for (int i = 0; i < num_clients; i++) {
-        clients.emplace_back([cid=i+1, value_size, num_requests, push_ratio] {
+        clients.emplace_back([cid=i+1, value_size, num_requests, push_ratio, num_stacks] {
               std::mt19937 gen(cid);
               std::uniform_real_distribution<> dis(0.0, 1.0);
+              std::uniform_int_distribution<> dis_stack(1, num_stacks);
               int req_done_cnt = 0;
-              std::string stack_name = "my_stack";
               std::string value = std::string(value_size, 'a');
               std::string value_read;
               while (req_done_cnt < num_requests) {
+                std::string stack_name = "my_stack_" + std::to_string(dis_stack(gen));
                 if (dis(gen) < push_ratio) {
                   Push(stack_name, value);
                 } else {
